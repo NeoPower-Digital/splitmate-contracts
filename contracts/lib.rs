@@ -60,11 +60,6 @@ mod splitmate {
 
             Ok(())
         }
-
-        #[ink(message)]
-        pub fn add_expense(&mut self, group_id: u128, expense: Expense) -> BaseResult {
-            Ok(())
-        }
     }
 
     #[cfg(test)]
