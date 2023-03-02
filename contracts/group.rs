@@ -7,11 +7,12 @@ use ink::storage::traits::StorageLayout;
 pub struct Group {
     pub id: u128,
     pub members: Vec<GroupMember>,
+    pub next_expense_id: u32,
 }
 
 #[derive(PartialEq, Debug, Eq, Clone, scale::Encode, scale::Decode)]
 #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, StorageLayout))]
 pub struct GroupMember {
-    pub member: AccountId,
+    pub member_address: AccountId,
     pub debt_value: i128,
 }
