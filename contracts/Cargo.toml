@@ -25,3 +25,10 @@ std = [
 ]
 ink-as-dependency = []
 e2e-tests = []
+
+# Needed until https://github.com/paritytech/ink/issues/364 is resolved.
+[profile.dev]
+overflow-checks = false
+
+[profile.release]
+overflow-checks = false
