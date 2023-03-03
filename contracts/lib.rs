@@ -4,24 +4,28 @@ pub mod errors;
 pub mod expense;
 pub mod group;
 pub mod input_models;
+pub mod output_models;
+pub mod utils;
 
 #[ink::contract]
 mod splitmate {
     use crate::errors::ContractError;
-    use crate::expense::{DistributionMember, DistributionType, Expense};
+    use crate::expense::Expense;
     use crate::group::{Group, GroupMember};
     use crate::input_models::ExpenseInput;
+    use crate::output_models::{DistributionMemberSummary, DistributionMemberTransfer};
+    use crate::utils::{
+        check_group_membership, process_expense_debts, process_giver_debt, BaseResult,
+    };
     use ink::prelude::vec::Vec;
     use ink::storage::Mapping;
 
-    type BaseResult = Result<(), ContractError>;
-
     #[ink(storage)]
     pub struct Splitmate {
-        groups: Mapping<u128, Group>,                 // Group ID -> Group
-        group_expenses: Mapping<u128, Vec<Expense>>,  // Group ID -> Expenses
-        member_groups: Mapping<AccountId, Vec<u128>>, // Account -> Group IDs
-        next_group_id: u128,
+        pub groups: Mapping<u128, Group>,                // Group ID -> Group
+        pub group_expenses: Mapping<u128, Vec<Expense>>, // Group ID -> Expenses
+        pub member_groups: Mapping<AccountId, Vec<u128>>, // Account -> Group IDs
+        pub next_group_id: u128,
     }
 
     impl Splitmate {
@@ -69,11 +73,11 @@ mod splitmate {
 
         #[ink(message)]
         pub fn add_expense(&mut self, expense_to_add: ExpenseInput) -> BaseResult {
-            let mut group = self.check_group_membership(expense_to_add.group)?;
+            let mut group = check_group_membership(&self, expense_to_add.group)?;
             let expense = Expense::new(group.next_expense_id.clone(), expense_to_add);
 
-            self.validate_expense(&expense)?;
-            self.process_expense_debts(&mut group, &expense)?;
+            expense.validate()?;
+            process_expense_debts(&mut group, &expense)?;
 
             let mut group_expenses = self
                 .group_expenses
@@ -90,6 +94,54 @@ mod splitmate {
         }
 
         #[ink(message)]
+        pub fn get_distribution(
+            &self,
+            group_id: u128,
+        ) -> Result<Vec<DistributionMemberSummary>, ContractError> {
+            let group = check_group_membership(&self, group_id)?;
+
+            let mut distribution_summary = Vec::<DistributionMemberSummary>::new();
+
+            let givers: Vec<GroupMember> = group
+                .members
+                .clone()
+                .into_iter()
+                .filter(|m| m.debt_value > 0)
+                .collect();
+
+            let mut receivers: Vec<GroupMember> = group
+                .members
+                .clone()
+                .into_iter()
+                .filter(|m| m.debt_value < 0)
+                .collect();
+            receivers.sort_by(|a, b| a.debt_value.cmp(&b.debt_value));
+
+            for giver in givers {
+                let mut distribution_member_summary = DistributionMemberSummary {
+                    member_account: giver.member_address,
+                    total_debt: giver.debt_value,
+                    debts: Vec::<DistributionMemberTransfer>::new(),
+                };
+
+                let mut pending_debt = giver.debt_value as u128;
+                while pending_debt > 0 {
+                    let debt_transfer = process_giver_debt(pending_debt, &mut receivers);
+
+                    distribution_member_summary
+                        .debts
+                        .push(debt_transfer.clone());
+
+                    pending_debt = pending_debt.checked_sub(debt_transfer.debt_value).unwrap();
+                }
+
+                distribution_summary.push(distribution_member_summary);
+            }
+
+            Ok(distribution_summary)
+        }
+
+        #[ink(message)]
         pub fn get_group(&self, group_id: u128) -> Group {
             // ToDo: Add group existence check
             self.groups.get(group_id).unwrap()
@@ -99,98 +151,6 @@ mod splitmate {
         pub fn get_expenses_by_group(&self, group_id: u128) -> Vec<Expense> {
             // ToDo: Add group existence check
             self.group_expenses.get(group_id).unwrap()
-        }
-
-        pub fn check_group_membership(&self, group_id: u128) -> Result<Group, ContractError> {
-            // ToDo: Encapsulate this
-            let group = self.groups.get(group_id);
-            if group.is_none() {
-                return Err(ContractError::GroupDoesNotExist);
-            }
-
-            let group = group.unwrap();
-
-            return match self.member_groups.get(self.env().caller()) {
-                Some(member_groups) => {
-                    if !member_groups
-                        .iter()
-                        .any(|member_group_id| *member_group_id == group_id)
-                    {
-                        return Err(ContractError::MemberIsNotInTheGroup);
-                    }
-
-                    Ok(group)
-                }
-                None => Err(ContractError::MemberIsNotInTheGroup),
-            };
-        }
-
-        pub fn validate_expense(&self, expense: &Expense) -> BaseResult {
-            if expense.amount == 0 {
-                return Err(ContractError::ExpenseAmountIsZero);
-            }
-
-            if expense.members.len() == 0 {
-                return Err(ContractError::ExpenseWithoutDistributionMembers);
-            }
-
-            // ToDo: Add the following validations ->
-            // - Sum of payers must be equal to total_amount
-            // - Sum of split.members.amount must be equal to total_amount
-
-            Ok(())
-        }
-
-        pub fn process_expense_debts(
-            &mut self,
-            group: &mut Group,
-            expense: &Expense,
-        ) -> BaseResult {
-            for expense_distribution_member in expense.members.clone() {
-                // Check/Get the group member reference and remove it
-                let group_member_index = group.members.iter().position(|group_member| {
-                    group_member.member_address == expense_distribution_member.member_address
-                });
-                let group_member_index = match group_member_index {
-                    Some(index) => index,
-                    None => return Err(ContractError::ExpenseDistributionMemberIsNotInTheGroup),
-                };
-
-                let mut group_member = group.members[group_member_index].clone();
-                group.members.swap_remove(group_member_index);
-
-                // Calculate how much the member has to pay
-                let amount_to_pay = self.calculate_amount_to_pay_by_member(
-                    expense,
-                    expense_distribution_member.clone(),
-                );
-
-                // Calculate the difference between the amount the member has to pay and the amount the member paid
-                let debt = (amount_to_pay as i128)
-                    .checked_sub(expense_distribution_member.paid as i128)
-                    .unwrap();
-
-                // Update the member debt
-                group_member.debt_value = group_member.debt_value.checked_add(debt).unwrap();
-
-                group.members.push(group_member);
-            }
-
-            Ok(())
-        }
-
-        pub fn calculate_amount_to_pay_by_member(
-            &self,
-            expense: &Expense,
-            split_member: DistributionMember,
-        ) -> u128 {
-            return match expense.distribution_type {
-                DistributionType::EQUALLY => expense
-                    .amount
-                    .checked_div(expense.members.len() as u128)
-                    .unwrap(),
-                DistributionType::UNEQUALLY => split_member.must_pay,
-            };
         }
     }
 
@@ -220,6 +180,55 @@ mod splitmate {
 
         fn init() -> (Splitmate, DefaultAccounts<DefaultEnvironment>) {
             (Splitmate::new(), get_default_accounts())
+        }
+
+        #[ink::test]
+        fn get_distribution_works() {
+            // Arrange
+            let (mut contract, accounts) = init();
+            set_sender(accounts.alice);
+
+            let group = Group {
+                id: 1,
+                members: vec![
+                    GroupMember {
+                        member_address: accounts.alice,
+                        debt_value: 100,
+                    },
+                    GroupMember {
+                        member_address: accounts.bob,
+                        debt_value: -50,
+                    },
+                    GroupMember {
+                        member_address: accounts.charlie,
+                        debt_value: -20,
+                    },
+                    GroupMember {
+                        member_address: accounts.django,
+                        debt_value: -30,
+                    },
+                    GroupMember {
+                        member_address: accounts.eve,
+                        debt_value: -45,
+                    },
+                    GroupMember {
+                        member_address: accounts.frank,
+                        debt_value: -5,
+                    },
+                ],
+                next_expense_id: 1,
+            };
+
+            contract.groups.insert(1, &group);
+            contract.member_groups.insert(accounts.alice, &vec![1]);
+
+            // Act
+            let distribution_summary = contract.get_distribution(1).unwrap();
+
+            // Assert
+            assert_eq!(distribution_summary.len(), 1);
+            assert_eq!(distribution_summary[0].total_debt, 100);
+            assert_eq!(distribution_summary[0].debts.len(), 3);
         }
     }
 }
