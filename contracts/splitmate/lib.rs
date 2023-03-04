@@ -14,7 +14,8 @@ mod splitmate {
     use crate::group::{Group, GroupMember};
     use crate::input_models::{ExpenseInput, GroupDebtsToPay};
     use crate::output_models::{
-        DistributionMemberSummary, DistributionMemberTransfer, SettleUpResult, SettledDebts,
+        GroupDistributionByMember, GroupMemberDistribution, GroupMemberDistributionTransfer,
+        GroupSettledDebts, SettleUpResult,
     };
     use crate::utils::{
         check_group_membership, process_expense_debts, process_giver_debt, update_group_debt,
@@ -100,13 +101,12 @@ mod splitmate {
         }
 
         #[ink(message)]
-        pub fn get_distribution(
+        pub fn get_group_distribution(
             &self,
             group_id: u128,
-        ) -> Result<Vec<DistributionMemberSummary>, ContractError> {
+        ) -> Result<Vec<GroupMemberDistribution>, ContractError> {
             let group = check_group_membership(&self, group_id)?;
-
-            let mut distribution_summary = Vec::<DistributionMemberSummary>::new();
+            let mut group_distribution = Vec::<GroupMemberDistribution>::new();
 
             let givers: Vec<GroupMember> = group
                 .members
@@ -115,41 +115,84 @@ mod splitmate {
                 .filter(|m| m.debt_value > 0)
                 .collect();
 
-            let mut receivers: Vec<GroupMember> = group
+            if givers.len() == 0 {
+                return Ok(group_distribution);
+            }
+
+            let mut takers: Vec<GroupMember> = group
                 .members
                 .clone()
                 .into_iter()
                 .filter(|m| m.debt_value < 0)
                 .collect();
-            receivers.sort_by(|a, b| a.debt_value.cmp(&b.debt_value));
+            takers.sort_by(|a, b| a.debt_value.cmp(&b.debt_value));
 
             for giver in givers {
-                let mut distribution_member_summary = DistributionMemberSummary {
+                let mut distribution_member = GroupMemberDistribution {
                     member_account: giver.member_address,
                     total_debt: giver.debt_value,
-                    debts: Vec::<DistributionMemberTransfer>::new(),
+                    transfers: Vec::<GroupMemberDistributionTransfer>::new(),
                 };
 
                 let mut pending_debt = giver.debt_value as u128;
                 while pending_debt > 0 {
-                    let debt_transfer = process_giver_debt(pending_debt, &mut receivers);
+                    let debt_transfer = process_giver_debt(pending_debt, &mut takers);
 
-                    distribution_member_summary
-                        .debts
-                        .push(debt_transfer.clone());
+                    distribution_member.transfers.push(debt_transfer.clone());
 
-                    pending_debt = pending_debt.checked_sub(debt_transfer.debt_value).unwrap();
+                    pending_debt = pending_debt.checked_sub(debt_transfer.value).unwrap();
                 }
 
-                distribution_summary.push(distribution_member_summary);
+                group_distribution.push(distribution_member);
             }
 
-            Ok(distribution_summary)
+            Ok(group_distribution)
+        }
+
+        #[ink(message)]
+        pub fn get_member_group_distributions(
+            &self,
+        ) -> Result<Vec<GroupDistributionByMember>, ContractError> {
+            let caller = self.env().caller();
+            let member_groups = self.member_groups.get(caller).unwrap_or(Vec::<u128>::new());
+
+            let mut caller_distributions = Vec::<GroupDistributionByMember>::new();
+
+            for group_id in member_groups {
+                let group_distribution = self.get_group_distribution(group_id)?;
+                let group_distribution_by_caller = group_distribution
+                    .iter()
+                    .find(|gmd| gmd.member_account == caller)
+                    .unwrap();
+                caller_distributions.push(GroupDistributionByMember {
+                    group_id,
+                    member_distribution: group_distribution_by_caller.clone(),
+                });
+            }
+
+            Ok(caller_distributions)
         }
 
         #[ink(message)]
         pub fn get_group(&self, group_id: u128) -> Result<Group, ContractError> {
             check_group_membership(&self, group_id)
+        }
+
+        #[ink(message)]
+        pub fn get_member_groups(&self) -> Result<Vec<Group>, ContractError> {
+            let caller = self.env().caller();
+            let group_ids = self.member_groups.get(caller);
+            let mut member_groups = Vec::<Group>::new();
+
+            if group_ids.is_none() {
+                return Ok(member_groups);
+            }
+
+            for group_id in group_ids.unwrap() {
+                member_groups.push(self.groups.get(group_id).unwrap());
+            }
+
+            Ok(member_groups)
         }
 
         #[ink(message)]
@@ -164,22 +207,22 @@ mod splitmate {
             debts_to_pay: Vec<GroupDebtsToPay>,
         ) -> Result<SettleUpResult, ContractError> {
             // ToDo: Add debts validation
-            let mut total_settled_debts = Vec::<SettledDebts>::new();
+            let mut total_settled_debts = Vec::<GroupSettledDebts>::new();
 
             for group_debts_to_pay in debts_to_pay {
                 let mut group = check_group_membership(&self, group_debts_to_pay.group_id)?;
 
                 let mut group_settled_debt_amount: u128 = 0;
-                let mut group_settled_debts = SettledDebts {
+                let mut group_settled_debts = GroupSettledDebts {
                     group_id: group.id,
-                    receivers: Vec::<AccountId>::new(),
+                    takers: Vec::<AccountId>::new(),
                 };
 
-                for receiver in group_debts_to_pay.receivers {
+                for taker in group_debts_to_pay.takers {
                     if PSP22Ref::transfer(
                         &mut self.token_address,
-                        receiver.member_address,
-                        receiver.value,
+                        taker.member_address,
+                        taker.value,
                         Vec::new(),
                     )
                     .is_err()
@@ -195,17 +238,16 @@ mod splitmate {
 
                         return Ok(SettleUpResult {
                             result: false,
-                            settled_debts: Some(total_settled_debts),
+                            total_settled_debts: Some(total_settled_debts),
                         });
                     };
 
-                    update_group_debt(&mut group, receiver.member_address, true, receiver.value);
+                    update_group_debt(&mut group, taker.member_address, true, taker.value);
 
-                    group_settled_debt_amount = group_settled_debt_amount
-                        .checked_add(receiver.value)
-                        .unwrap();
+                    group_settled_debt_amount =
+                        group_settled_debt_amount.checked_add(taker.value).unwrap();
 
-                    group_settled_debts.receivers.push(receiver.member_address);
+                    group_settled_debts.takers.push(taker.member_address);
                 }
 
                 update_group_debt(
@@ -219,7 +261,7 @@ mod splitmate {
 
             Ok(SettleUpResult {
                 result: true,
-                settled_debts: None,
+                total_settled_debts: None,
             })
         }
     }
@@ -293,12 +335,12 @@ mod splitmate {
             contract.member_groups.insert(accounts.alice, &vec![1]);
 
             // Act
-            let distribution_summary = contract.get_distribution(1).unwrap();
+            let distribution_summary = contract.get_group_distribution(1).unwrap();
 
             // Assert
             assert_eq!(distribution_summary.len(), 1);
             assert_eq!(distribution_summary[0].total_debt, 100);
-            assert_eq!(distribution_summary[0].debts.len(), 3);
+            assert_eq!(distribution_summary[0].transfers.len(), 3);
         }
     }
 }

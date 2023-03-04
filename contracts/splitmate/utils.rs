@@ -4,9 +4,9 @@ use ink::primitives::AccountId;
 
 use crate::{
     errors::ContractError,
-    expense::{DistributionMember, DistributionType, Expense},
+    expense::{DistributionType, Expense, ExpenseMember},
     group::{Group, GroupMember},
-    output_models::DistributionMemberTransfer,
+    output_models::GroupMemberDistributionTransfer,
     splitmate::Splitmate,
 };
 
@@ -46,43 +46,43 @@ pub fn process_expense_debts(group: &mut Group, expense: &Expense) -> BaseResult
 
 pub fn process_giver_debt(
     debt_value: u128,
-    receivers: &mut Vec<GroupMember>,
-) -> DistributionMemberTransfer {
+    takers: &mut Vec<GroupMember>,
+) -> GroupMemberDistributionTransfer {
     // With same balance
-    let receiver_with_same_balance_amount =
-        find_receiver_by(receivers, |r| r.debt_value.abs() as u128 == debt_value);
+    let taker_with_same_balance_amount =
+        find_taker_by(takers, |r| r.debt_value.abs() as u128 == debt_value);
 
-    if receiver_with_same_balance_amount.is_some() {
-        return DistributionMemberTransfer {
-            member_account: receiver_with_same_balance_amount.unwrap(),
-            debt_value,
+    if taker_with_same_balance_amount.is_some() {
+        return GroupMemberDistributionTransfer {
+            member_account: taker_with_same_balance_amount.unwrap(),
+            value: debt_value,
         };
     }
 
     // With more balance
-    let receiver_with_more_balance_amount =
-        find_receiver_by(receivers, |r| r.debt_value.abs() as u128 > debt_value);
+    let taker_with_more_balance_amount =
+        find_taker_by(takers, |r| r.debt_value.abs() as u128 > debt_value);
 
-    if receiver_with_more_balance_amount.is_some() {
-        return DistributionMemberTransfer {
-            member_account: receiver_with_more_balance_amount.unwrap(),
-            debt_value,
+    if taker_with_more_balance_amount.is_some() {
+        return GroupMemberDistributionTransfer {
+            member_account: taker_with_more_balance_amount.unwrap(),
+            value: debt_value,
         };
     }
 
-    let receiver = receivers[0].clone();
-    receivers.remove(0);
+    let taker = takers[0].clone();
+    takers.remove(0);
 
-    DistributionMemberTransfer {
-        member_account: receiver.member_address,
-        debt_value: receiver.debt_value.abs() as u128,
+    GroupMemberDistributionTransfer {
+        member_account: taker.member_address,
+        value: taker.debt_value.abs() as u128,
     }
 }
 
 pub fn update_group_debt(
     group: &mut Group,
     member_address: AccountId,
-    is_receiver: bool,
+    is_taker: bool,
     amount: u128,
 ) {
     let member_position = group
@@ -92,18 +92,15 @@ pub fn update_group_debt(
         .unwrap();
     let mut member = group.members[member_position].clone();
     group.members.remove(member_position);
-    member.debt_value = if is_receiver {
-         member.debt_value.checked_add(amount as i128).unwrap()
+    member.debt_value = if is_taker {
+        member.debt_value.checked_add(amount as i128).unwrap()
     } else {
         member.debt_value.checked_sub(amount as i128).unwrap()
     };
     group.members.push(member)
 }
 
-pub fn calculate_amount_to_pay_by_member(
-    expense: &Expense,
-    split_member: DistributionMember,
-) -> u128 {
+pub fn calculate_amount_to_pay_by_member(expense: &Expense, split_member: ExpenseMember) -> u128 {
     return match expense.distribution_type {
         DistributionType::EQUALLY => expense
             .amount
@@ -113,17 +110,17 @@ pub fn calculate_amount_to_pay_by_member(
     };
 }
 
-pub fn find_receiver_by<P>(receivers: &mut Vec<GroupMember>, predicate: P) -> Option<AccountId>
+pub fn find_taker_by<P>(takers: &mut Vec<GroupMember>, predicate: P) -> Option<AccountId>
 where
     P: FnMut(&GroupMember) -> bool,
 {
-    let receiver_index = receivers.iter().position(predicate);
+    let taker_index = takers.iter().position(predicate);
 
-    if receiver_index.is_some() {
-        let receiver = receivers[receiver_index.unwrap()].clone();
-        receivers.remove(receiver_index.unwrap());
+    if taker_index.is_some() {
+        let taker = takers[taker_index.unwrap()].clone();
+        takers.remove(taker_index.unwrap());
 
-        return Some(receiver.member_address);
+        return Some(taker.member_address);
     }
 
     None
@@ -133,13 +130,7 @@ pub fn check_group_membership(
     instance: &Splitmate,
     group_id: u128,
 ) -> Result<Group, ContractError> {
-    // ToDo: Encapsulate this
-    let group = instance.groups.get(group_id);
-    if group.is_none() {
-        return Err(ContractError::GroupDoesNotExist);
-    }
-
-    let group = group.unwrap();
+    let group = get_group_by_id(instance, group_id)?;
 
     return match instance.member_groups.get(instance.env().caller()) {
         Some(member_groups) => {
@@ -154,4 +145,11 @@ pub fn check_group_membership(
         }
         None => Err(ContractError::MemberIsNotInTheGroup),
     };
+}
+
+pub fn get_group_by_id(instance: &Splitmate, group_id: u128) -> Result<Group, ContractError> {
+    match instance.groups.get(group_id) {
+        Some(group) => Ok(group),
+        None => Err(ContractError::GroupDoesNotExist),
+    }
 }

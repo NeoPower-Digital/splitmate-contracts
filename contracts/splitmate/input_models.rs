@@ -30,5 +30,5 @@ pub struct DistributionByMemberInput {
 #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, StorageLayout))]
 pub struct GroupDebtsToPay {
     pub group_id: u128,
-    pub receivers: Vec<DistributionByMemberInput>,
+    pub takers: Vec<DistributionByMemberInput>,
 }

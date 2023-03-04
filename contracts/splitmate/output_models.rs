@@ -4,29 +4,36 @@ use ink::storage::traits::StorageLayout;
 
 #[derive(PartialEq, Debug, Eq, Clone, scale::Encode, scale::Decode)]
 #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, StorageLayout))]
-pub struct DistributionMemberSummary {
+pub struct GroupMemberDistribution {
     pub member_account: AccountId,
     pub total_debt: i128,
-    pub debts: Vec<DistributionMemberTransfer>,
+    pub transfers: Vec<GroupMemberDistributionTransfer>,
 }
 
 #[derive(PartialEq, Debug, Eq, Clone, scale::Encode, scale::Decode)]
 #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, StorageLayout))]
-pub struct DistributionMemberTransfer {
+pub struct GroupMemberDistributionTransfer {
     pub member_account: AccountId,
-    pub debt_value: u128,
+    pub value: u128,
 }
 
 #[derive(PartialEq, Debug, Eq, Clone, scale::Encode, scale::Decode)]
 #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, StorageLayout))]
-pub struct SettledDebts {
+pub struct GroupSettledDebts {
     pub group_id: u128,
-    pub receivers: Vec<AccountId>,
+    pub takers: Vec<AccountId>,
 }
 
 #[derive(PartialEq, Debug, Eq, Clone, scale::Encode, scale::Decode)]
 #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, StorageLayout))]
 pub struct SettleUpResult {
     pub result: bool,
-    pub settled_debts: Option<Vec<SettledDebts>>,
+    pub total_settled_debts: Option<Vec<GroupSettledDebts>>,
+}
+
+#[derive(PartialEq, Debug, Eq, Clone, scale::Encode, scale::Decode)]
+#[cfg_attr(feature = "std", derive(scale_info::TypeInfo, StorageLayout))]
+pub struct GroupDistributionByMember {
+    pub group_id: u128,
+    pub member_distribution: GroupMemberDistribution,
 }

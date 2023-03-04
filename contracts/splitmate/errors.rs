@@ -9,4 +9,6 @@ pub enum ContractError {
     ExpenseWithoutDistributionMembers,
     GroupDoesNotExist,
     TransferError,
+    MemberDoesNotHaveGroups,
+    TheGroupIsSettled,
 }
