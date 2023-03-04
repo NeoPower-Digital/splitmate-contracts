@@ -1,4 +1,6 @@
+use crate::errors::ContractError;
 use crate::input_models::ExpenseInput;
+use crate::utils::BaseResult;
 use ink::prelude::vec::Vec;
 use ink::primitives::AccountId;
 use ink::storage::traits::StorageLayout;
@@ -57,5 +59,21 @@ impl Expense {
             distribution_type: expense_to_add.distribution.distribution_type,
             members,
         }
+    }
+
+    pub fn validate(&self) -> BaseResult {
+        if self.amount == 0 {
+            return Err(ContractError::ExpenseAmountIsZero);
+        }
+
+        if self.members.len() == 0 {
+            return Err(ContractError::ExpenseWithoutDistributionMembers);
+        }
+
+        // ToDo: Add the following validations ->
+        // - Sum of payers must be equal to total_amount
+        // - Sum of split.members.amount must be equal to total_amount
+
+        Ok(())
     }
 }
