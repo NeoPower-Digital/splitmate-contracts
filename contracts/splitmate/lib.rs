@@ -12,17 +12,22 @@ mod splitmate {
     use crate::errors::ContractError;
     use crate::expense::Expense;
     use crate::group::{Group, GroupMember};
-    use crate::input_models::ExpenseInput;
-    use crate::output_models::{DistributionMemberSummary, DistributionMemberTransfer};
+    use crate::input_models::{ExpenseInput, GroupDebtsToPay};
+    use crate::output_models::{
+        DistributionMemberSummary, DistributionMemberTransfer, SettleUpResult, SettledDebts,
+    };
     use crate::utils::{
-        check_group_membership, process_expense_debts, process_giver_debt, BaseResult,
+        check_group_membership, process_expense_debts, process_giver_debt, update_group_debt,
+        BaseResult,
     };
     use ink::prelude::vec::Vec;
     use ink::storage::Mapping;
+    use openbrush::contracts::traits::psp22::PSP22Ref;
 
     #[ink(storage)]
     pub struct Splitmate {
-        pub groups: Mapping<u128, Group>,                // Group ID -> Group
+        pub token_address: AccountId,
+        pub groups: Mapping<u128, Group>, // Group ID -> Group
         pub group_expenses: Mapping<u128, Vec<Expense>>, // Group ID -> Expenses
         pub member_groups: Mapping<AccountId, Vec<u128>>, // Account -> Group IDs
         pub next_group_id: u128,
@@ -30,8 +35,9 @@ mod splitmate {
 
     impl Splitmate {
         #[ink(constructor)]
-        pub fn new() -> Self {
+        pub fn new(token_address: AccountId) -> Self {
             Self {
+                token_address,
                 groups: Mapping::default(),
                 group_expenses: Mapping::default(),
                 member_groups: Mapping::default(),
@@ -73,7 +79,7 @@ mod splitmate {
 
         #[ink(message)]
         pub fn add_expense(&mut self, expense_to_add: ExpenseInput) -> BaseResult {
-            let mut group = check_group_membership(&self, expense_to_add.group)?;
+            let mut group = check_group_membership(&self, expense_to_add.group_id)?;
             let expense = Expense::new(group.next_expense_id.clone(), expense_to_add);
 
             expense.validate()?;
@@ -142,15 +148,79 @@ mod splitmate {
         }
 
         #[ink(message)]
-        pub fn get_group(&self, group_id: u128) -> Group {
-            // ToDo: Add group existence check
-            self.groups.get(group_id).unwrap()
+        pub fn get_group(&self, group_id: u128) -> Result<Group, ContractError> {
+            check_group_membership(&self, group_id)
         }
 
         #[ink(message)]
-        pub fn get_expenses_by_group(&self, group_id: u128) -> Vec<Expense> {
-            // ToDo: Add group existence check
-            self.group_expenses.get(group_id).unwrap()
+        pub fn get_expenses_by_group(&self, group_id: u128) -> Result<Vec<Expense>, ContractError> {
+            check_group_membership(&self, group_id)?;
+            Ok(self.group_expenses.get(group_id).unwrap())
+        }
+
+        #[ink(message)]
+        pub fn settle_up(
+            &mut self,
+            debts_to_pay: Vec<GroupDebtsToPay>,
+        ) -> Result<SettleUpResult, ContractError> {
+            // ToDo: Add debts validation
+            let mut total_settled_debts = Vec::<SettledDebts>::new();
+
+            for group_debts_to_pay in debts_to_pay {
+                let mut group = check_group_membership(&self, group_debts_to_pay.group_id)?;
+
+                let mut group_settled_debt_amount: u128 = 0;
+                let mut group_settled_debts = SettledDebts {
+                    group_id: group.id,
+                    receivers: Vec::<AccountId>::new(),
+                };
+
+                for receiver in group_debts_to_pay.receivers {
+                    if PSP22Ref::transfer(
+                        &mut self.token_address,
+                        receiver.member_address,
+                        receiver.value,
+                        Vec::new(),
+                    )
+                    .is_err()
+                    {
+                        update_group_debt(
+                            &mut group,
+                            self.env().caller(),
+                            false,
+                            group_settled_debt_amount,
+                        );
+
+                        total_settled_debts.push(group_settled_debts);
+
+                        return Ok(SettleUpResult {
+                            result: false,
+                            settled_debts: Some(total_settled_debts),
+                        });
+                    };
+
+                    update_group_debt(&mut group, receiver.member_address, true, receiver.value);
+
+                    group_settled_debt_amount = group_settled_debt_amount
+                        .checked_add(receiver.value)
+                        .unwrap();
+
+                    group_settled_debts.receivers.push(receiver.member_address);
+                }
+
+                update_group_debt(
+                    &mut group,
+                    self.env().caller(),
+                    false,
+                    group_settled_debt_amount,
+                );
+                total_settled_debts.push(group_settled_debts);
+            }
+
+            Ok(SettleUpResult {
+                result: true,
+                settled_debts: None,
+            })
         }
     }
 
@@ -179,7 +249,7 @@ mod splitmate {
         }
 
         fn init() -> (Splitmate, DefaultAccounts<DefaultEnvironment>) {
-            (Splitmate::new(), get_default_accounts())
+            (Splitmate::new("asd"), get_default_accounts())
         }
 
         #[ink::test]

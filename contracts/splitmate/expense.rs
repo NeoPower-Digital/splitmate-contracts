@@ -54,7 +54,7 @@ impl Expense {
 
         Expense {
             id,
-            group_id: expense_to_add.group,
+            group_id: expense_to_add.group_id,
             amount: expense_to_add.amount,
             distribution_type: expense_to_add.distribution.distribution_type,
             members,

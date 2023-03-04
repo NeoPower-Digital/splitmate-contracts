@@ -79,6 +79,27 @@ pub fn process_giver_debt(
     }
 }
 
+pub fn update_group_debt(
+    group: &mut Group,
+    member_address: AccountId,
+    is_receiver: bool,
+    amount: u128,
+) {
+    let member_position = group
+        .members
+        .iter()
+        .position(|m| m.member_address == member_address)
+        .unwrap();
+    let mut member = group.members[member_position].clone();
+    group.members.remove(member_position);
+    member.debt_value = if is_receiver {
+         member.debt_value.checked_add(amount as i128).unwrap()
+    } else {
+        member.debt_value.checked_sub(amount as i128).unwrap()
+    };
+    group.members.push(member)
+}
+
 pub fn calculate_amount_to_pay_by_member(
     expense: &Expense,
     split_member: DistributionMember,
