@@ -8,4 +8,5 @@ pub enum ContractError {
     ExpenseWithoutMembers,
     ExpenseWithoutDistributionMembers,
     GroupDoesNotExist,
+    TransferError,
 }
