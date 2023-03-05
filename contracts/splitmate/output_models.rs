@@ -1,6 +1,14 @@
+use crate::group::Group;
 use ink::prelude::vec::Vec;
 use ink::primitives::AccountId;
 use ink::storage::traits::StorageLayout;
+
+#[derive(PartialEq, Debug, Eq, Clone, scale::Encode, scale::Decode)]
+#[cfg_attr(feature = "std", derive(scale_info::TypeInfo, StorageLayout))]
+pub struct MemberAccount {
+    pub groups: Vec<Group>,
+    pub debts_by_group: Vec<GroupDistributionByMember>,
+}
 
 #[derive(PartialEq, Debug, Eq, Clone, scale::Encode, scale::Decode)]
 #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, StorageLayout))]

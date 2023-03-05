@@ -1,7 +1,17 @@
 use crate::expense::DistributionType;
-use ink::prelude::vec::Vec;
+use ink::prelude::{
+    vec::Vec,
+    string::String,
+};
 use ink::primitives::AccountId;
 use ink::storage::traits::StorageLayout;
+
+#[derive(PartialEq, Debug, Eq, Clone, scale::Encode, scale::Decode)]
+#[cfg_attr(feature = "std", derive(scale_info::TypeInfo, StorageLayout))]
+pub struct GroupMemberInput {
+    pub address: AccountId,
+    pub name: String,
+}
 
 #[derive(PartialEq, Debug, Eq, Clone, scale::Encode, scale::Decode)]
 #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, StorageLayout))]

@@ -6,7 +6,7 @@ use crate::{
     errors::ContractError,
     expense::{DistributionType, Expense, ExpenseMember},
     group::{Group, GroupMember},
-    output_models::GroupMemberDistributionTransfer,
+    output_models::{GroupDistributionByMember, GroupMemberDistributionTransfer},
     splitmate::Splitmate,
 };
 
@@ -15,9 +15,10 @@ pub type BaseResult = Result<(), ContractError>;
 pub fn process_expense_debts(group: &mut Group, expense: &Expense) -> BaseResult {
     for expense_distribution_member in expense.members.clone() {
         // Check/Get the group member reference and remove it
-        let group_member_index = group.members.iter().position(|group_member| {
-            group_member.member_address == expense_distribution_member.member_address
-        });
+        let group_member_index = group
+            .members
+            .iter()
+            .position(|group_member| group_member.address == expense_distribution_member.address);
         let group_member_index = match group_member_index {
             Some(index) => index,
             None => return Err(ContractError::ExpenseDistributionMemberIsNotInTheGroup),
@@ -74,7 +75,7 @@ pub fn process_giver_debt(
     takers.remove(0);
 
     GroupMemberDistributionTransfer {
-        member_account: taker.member_address,
+        member_account: taker.address,
         value: taker.debt_value.abs() as u128,
     }
 }
@@ -88,7 +89,7 @@ pub fn update_group_debt(
     let member_position = group
         .members
         .iter()
-        .position(|m| m.member_address == member_address)
+        .position(|m| m.address == member_address)
         .unwrap();
     let mut member = group.members[member_position].clone();
     group.members.remove(member_position);
@@ -120,7 +121,7 @@ where
         let taker = takers[taker_index.unwrap()].clone();
         takers.remove(taker_index.unwrap());
 
-        return Some(taker.member_address);
+        return Some(taker.address);
     }
 
     None
@@ -152,4 +153,61 @@ pub fn get_group_by_id(instance: &Splitmate, group_id: u128) -> Result<Group, Co
         Some(group) => Ok(group),
         None => Err(ContractError::GroupDoesNotExist),
     }
+}
+
+pub fn get_member_group_distributions(
+    instance: &Splitmate,
+    member_address: AccountId,
+) -> Result<Vec<GroupDistributionByMember>, ContractError> {
+    let member_groups = instance
+        .member_groups
+        .get(member_address)
+        .unwrap_or(Vec::<u128>::new());
+
+    let mut caller_distributions = Vec::<GroupDistributionByMember>::new();
+
+    for group_id in member_groups {
+        let group_distribution = instance.get_group_distribution(group_id)?;
+        let group_distribution_by_caller = group_distribution
+            .iter()
+            .find(|gmd| gmd.member_account == member_address)
+            .unwrap();
+        caller_distributions.push(GroupDistributionByMember {
+            group_id,
+            member_distribution: group_distribution_by_caller.clone(),
+        });
+    }
+
+    Ok(caller_distributions)
+}
+
+pub fn get_member_groups(
+    instance: &Splitmate,
+    member_address: AccountId,
+) -> Result<Vec<Group>, ContractError> {
+    let group_ids = instance.member_groups.get(member_address);
+    let mut member_groups = Vec::<Group>::new();
+
+    if group_ids.is_none() {
+        return Ok(member_groups);
+    }
+
+    for group_id in group_ids.unwrap() {
+        member_groups.push(instance.groups.get(group_id).unwrap());
+    }
+
+    Ok(member_groups)
+}
+
+pub fn add_to_member_groups(instance: &mut Splitmate, member_address: AccountId, group_id: u128) {
+    let mut member_groups = instance
+        .member_groups
+        .get(member_address)
+        .unwrap_or(Vec::<u128>::new());
+
+    member_groups.push(group_id);
+
+    instance
+        .member_groups
+        .insert(member_address, &member_groups);
 }

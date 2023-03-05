@@ -15,7 +15,7 @@ pub enum DistributionType {
 #[derive(PartialEq, Debug, Eq, Clone, scale::Encode, scale::Decode)]
 #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, StorageLayout))]
 pub struct ExpenseMember {
-    pub member_address: AccountId,
+    pub address: AccountId,
     pub paid: u128,
     pub must_pay: u128,
 }
@@ -45,7 +45,7 @@ impl Expense {
                     };
 
                 ExpenseMember {
-                    member_address: distribution_by_member.member_address,
+                    address: distribution_by_member.member_address,
                     paid: paid_value,
                     must_pay: distribution_by_member.value,
                 }

@@ -14,14 +14,15 @@ mod splitmate {
     use crate::group::{Group, GroupMember};
     use crate::input_models::{ExpenseInput, GroupDebtsToPay};
     use crate::output_models::{
-        GroupDistributionByMember, GroupMemberDistribution, GroupMemberDistributionTransfer,
-        GroupSettledDebts, SettleUpResult,
+        GroupMemberDistribution, GroupMemberDistributionTransfer, GroupSettledDebts, MemberAccount,
+        SettleUpResult,
     };
     use crate::utils::{
-        check_group_membership, process_expense_debts, process_giver_debt, update_group_debt,
-        BaseResult,
+        add_to_member_groups, check_group_membership, get_group_by_id,
+        get_member_group_distributions, get_member_groups, process_expense_debts,
+        process_giver_debt, update_group_debt, BaseResult,
     };
-    use ink::prelude::vec::Vec;
+    use ink::prelude::{string::String, vec::Vec};
     use ink::storage::Mapping;
     use openbrush::contracts::traits::psp22::PSP22Ref;
 
@@ -47,33 +48,41 @@ mod splitmate {
         }
 
         #[ink(message)]
-        pub fn add_group(&mut self, members_to_add: Vec<AccountId>) -> BaseResult {
+        pub fn add_group(&mut self, group_name: String, caller_name: String) -> BaseResult {
+            let caller_address = self.env().caller();
             let next_group_id = self.next_group_id.clone();
-            let mut new_group_members = Vec::<GroupMember>::new();
 
-            for member_to_add in members_to_add {
-                let mut member_to_add_groups = self
-                    .member_groups
-                    .get(member_to_add)
-                    .unwrap_or(Vec::<u128>::new());
-                member_to_add_groups.push(next_group_id);
-                self.member_groups
-                    .insert(member_to_add, &member_to_add_groups);
+            let new_group_members = [GroupMember {
+                address: caller_address,
+                name: caller_name,
+                debt_value: 0,
+            }]
+            .to_vec();
 
-                new_group_members.push(GroupMember {
-                    member_address: member_to_add,
-                    debt_value: 0,
-                });
-            }
-
-            let new_group = Group {
-                id: next_group_id,
-                members: new_group_members,
-                next_expense_id: 1,
-            };
-
+            let new_group = Group::new(next_group_id, group_name, new_group_members);
             self.groups.insert(next_group_id, &new_group);
+
+            add_to_member_groups(self, caller_address, next_group_id);
+
             self.next_group_id = self.next_group_id.checked_add(1).unwrap();
+
+            Ok(())
+        }
+
+        #[ink(message)]
+        pub fn join_group(&mut self, group_id: u128, member_name: String) -> BaseResult {
+            let caller_address = self.env().caller();
+            let mut group = get_group_by_id(&self, group_id)?;
+
+            group.members.push(GroupMember {
+                address: caller_address,
+                name: member_name,
+                debt_value: 0,
+            });
+
+            self.groups.insert(group_id, &group);
+
+            add_to_member_groups(self, caller_address, group_id);
 
             Ok(())
         }
@@ -129,7 +138,7 @@ mod splitmate {
 
             for giver in givers {
                 let mut distribution_member = GroupMemberDistribution {
-                    member_account: giver.member_address,
+                    member_account: giver.address,
                     total_debt: giver.debt_value,
                     transfers: Vec::<GroupMemberDistributionTransfer>::new(),
                 };
@@ -150,49 +159,20 @@ mod splitmate {
         }
 
         #[ink(message)]
-        pub fn get_member_group_distributions(
-            &self,
-        ) -> Result<Vec<GroupDistributionByMember>, ContractError> {
+        pub fn get_member_account(&self) -> Result<MemberAccount, ContractError> {
             let caller = self.env().caller();
-            let member_groups = self.member_groups.get(caller).unwrap_or(Vec::<u128>::new());
+            let groups = get_member_groups(&self, caller)?;
+            let debts_by_group = get_member_group_distributions(&self, caller)?;
 
-            let mut caller_distributions = Vec::<GroupDistributionByMember>::new();
-
-            for group_id in member_groups {
-                let group_distribution = self.get_group_distribution(group_id)?;
-                let group_distribution_by_caller = group_distribution
-                    .iter()
-                    .find(|gmd| gmd.member_account == caller)
-                    .unwrap();
-                caller_distributions.push(GroupDistributionByMember {
-                    group_id,
-                    member_distribution: group_distribution_by_caller.clone(),
-                });
-            }
-
-            Ok(caller_distributions)
+            Ok(MemberAccount {
+                groups,
+                debts_by_group,
+            })
         }
 
         #[ink(message)]
         pub fn get_group(&self, group_id: u128) -> Result<Group, ContractError> {
             check_group_membership(&self, group_id)
-        }
-
-        #[ink(message)]
-        pub fn get_member_groups(&self) -> Result<Vec<Group>, ContractError> {
-            let caller = self.env().caller();
-            let group_ids = self.member_groups.get(caller);
-            let mut member_groups = Vec::<Group>::new();
-
-            if group_ids.is_none() {
-                return Ok(member_groups);
-            }
-
-            for group_id in group_ids.unwrap() {
-                member_groups.push(self.groups.get(group_id).unwrap());
-            }
-
-            Ok(member_groups)
         }
 
         #[ink(message)]
@@ -302,29 +282,36 @@ mod splitmate {
 
             let group = Group {
                 id: 1,
+                name: "test".to_str(),
                 members: vec![
                     GroupMember {
-                        member_address: accounts.alice,
+                        address: accounts.alice,
+                        name: "Alice".to_str(),
                         debt_value: 100,
                     },
                     GroupMember {
-                        member_address: accounts.bob,
+                        address: accounts.bob,
+                        name: "Bob".to_str(),
                         debt_value: -50,
                     },
                     GroupMember {
-                        member_address: accounts.charlie,
+                        address: accounts.charlie,
+                        name: "Charlie".to_str(),
                         debt_value: -20,
                     },
                     GroupMember {
-                        member_address: accounts.django,
+                        address: accounts.django,
+                        name: "Django".to_str(),
                         debt_value: -30,
                     },
                     GroupMember {
-                        member_address: accounts.eve,
+                        address: accounts.eve,
+                        name: "Eve".to_str(),
                         debt_value: -45,
                     },
                     GroupMember {
-                        member_address: accounts.frank,
+                        address: accounts.frank,
+                        name: "Frank".to_str(),
                         debt_value: -5,
                     },
                 ],
