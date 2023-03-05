@@ -6,7 +6,9 @@ use crate::{
     errors::ContractError,
     expense::{DistributionType, Expense, ExpenseMember},
     group::{Group, GroupMember},
-    output_models::{GroupDistributionByMember, GroupMemberDistributionTransfer},
+    output_models::{
+        GroupDistributionByMember, GroupMemberDistribution, GroupMemberDistributionTransfer,
+    },
     splitmate::Splitmate,
 };
 
@@ -45,6 +47,7 @@ pub fn process_expense_debts(group: &mut Group, expense: &Expense) -> BaseResult
     Ok(())
 }
 
+/// Finds the best taker for the specified member debt.
 pub fn process_giver_debt(
     debt_value: u128,
     takers: &mut Vec<GroupMember>,
@@ -71,6 +74,7 @@ pub fn process_giver_debt(
         };
     }
 
+    // With less balance
     let taker = takers[0].clone();
     takers.remove(0);
 
@@ -80,7 +84,8 @@ pub fn process_giver_debt(
     }
 }
 
-pub fn update_group_debt(
+/// Updates the specified member group debt
+pub fn update_member_group_debt(
     group: &mut Group,
     member_address: AccountId,
     is_taker: bool,
@@ -93,11 +98,13 @@ pub fn update_group_debt(
         .unwrap();
     let mut member = group.members[member_position].clone();
     group.members.remove(member_position);
+
     member.debt_value = if is_taker {
         member.debt_value.checked_add(amount as i128).unwrap()
     } else {
         member.debt_value.checked_sub(amount as i128).unwrap()
     };
+
     group.members.push(member)
 }
 
@@ -127,6 +134,7 @@ where
     None
 }
 
+/// Checks if the specified group exists and if the caller is inside of it.
 pub fn check_group_membership(
     instance: &Splitmate,
     group_id: u128,
@@ -155,6 +163,57 @@ pub fn get_group_by_id(instance: &Splitmate, group_id: u128) -> Result<Group, Co
     }
 }
 
+/// Gets a group debts distribution.
+/// Using two groups (givers & takers), calculates the transfers to be done between members.
+pub fn get_group_distribution(
+    instance: &Splitmate,
+    group_id: u128,
+) -> Result<Vec<GroupMemberDistribution>, ContractError> {
+    let group = check_group_membership(instance, group_id)?;
+    let mut group_distribution = Vec::<GroupMemberDistribution>::new();
+
+    let givers: Vec<GroupMember> = group
+        .members
+        .clone()
+        .into_iter()
+        .filter(|m| m.debt_value > 0)
+        .collect();
+
+    if givers.len() == 0 {
+        return Ok(group_distribution);
+    }
+
+    let mut takers: Vec<GroupMember> = group
+        .members
+        .clone()
+        .into_iter()
+        .filter(|m| m.debt_value < 0)
+        .collect();
+    takers.sort_by(|a, b| a.debt_value.cmp(&b.debt_value));
+
+    for giver in givers {
+        let mut distribution_member = GroupMemberDistribution {
+            member_account: giver.address,
+            total_debt: giver.debt_value,
+            transfers: Vec::<GroupMemberDistributionTransfer>::new(),
+        };
+
+        let mut pending_debt = giver.debt_value as u128;
+        while pending_debt > 0 {
+            let debt_transfer = process_giver_debt(pending_debt, &mut takers);
+
+            distribution_member.transfers.push(debt_transfer.clone());
+
+            pending_debt = pending_debt.checked_sub(debt_transfer.value).unwrap();
+        }
+
+        group_distribution.push(distribution_member);
+    }
+
+    Ok(group_distribution)
+}
+
+/// Gets a member debts distribution for all his groups.
 pub fn get_member_group_distributions(
     instance: &Splitmate,
     member_address: AccountId,
@@ -167,7 +226,7 @@ pub fn get_member_group_distributions(
     let mut caller_distributions = Vec::<GroupDistributionByMember>::new();
 
     for group_id in member_groups {
-        let group_distribution = instance.get_group_distribution(group_id)?;
+        let group_distribution = get_group_distribution(instance, group_id)?;
         let group_distribution_by_caller = group_distribution
             .iter()
             .find(|gmd| gmd.member_account == member_address)
