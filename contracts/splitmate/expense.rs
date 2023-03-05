@@ -16,10 +16,15 @@ pub enum DistributionType {
 #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, StorageLayout))]
 pub struct ExpenseMember {
     pub address: AccountId,
+    /// The paid amount by the member  
     pub paid: u128,
+    /// The member debt
     pub must_pay: u128,
 }
 
+/// Each expense has an ID and is linked to a group.
+/// Two distribution types: equally and unequally.
+/// The total amount distribution is specified in the members list.
 #[derive(PartialEq, Debug, Eq, Clone, scale::Encode, scale::Decode)]
 #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, StorageLayout))]
 pub struct Expense {

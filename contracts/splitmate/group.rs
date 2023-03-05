@@ -7,9 +7,11 @@ use ink::storage::traits::StorageLayout;
 pub struct GroupMember {
     pub address: AccountId,
     pub name: String,
+    /// The total member balance/debt
     pub debt_value: i128,
 }
 
+/// Each group has an ID and a name.
 #[derive(PartialEq, Debug, Eq, Clone, scale::Encode, scale::Decode)]
 #[cfg_attr(feature = "std", derive(scale_info::TypeInfo, StorageLayout))]
 pub struct Group {
